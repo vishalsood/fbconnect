@@ -1,0 +1,6 @@
+1. Install the module Fconnect under the directory <SiteRoot>/modules/fconnect 
+2. Download the Facebook client library located at http://svn.facebook.com/svnroot/platform/clients/packages/facebook-platform.tar.gz. 
+3. Copy the files under the directory <SiteRoot>/modules/fconnect/facebook-client, where <SiteRoot> is the root of the site. 
+4. Next you will need to get application key and secret. To get that, create a facebook application. Visit http://www.facebook.com/developers/#/developers/createapp.php and fill up the form. Make sure your callback URL points to the site root (E.g., www.samplesite.com) 
+5. Go to the module settings admin page and fill up the key/secret you get from Facebook. These settings will be available at <SiteRoot>/admin/settings/fconnect. 
+6. Setup the Facebook Connect Block settings. You will see a new “Facebook Connect” block at <SiteRoot>/admin/build/block. Click configure to set properties. 

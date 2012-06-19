@@ -1,0 +1,6 @@
+;$Id: fconnect.info,v 1.0 2010/01/13 09:19:18 vsood Exp $
+name= fconnect
+description = Enables using facebook accounts for the site authentication
+core = 6.x
+package = "Facebook Connect"
+php = 5.2

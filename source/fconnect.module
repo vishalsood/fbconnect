@@ -1,0 +1,889 @@
+<?php
+/**
+ * @file
+ * This module integrates Facebook Connect into Drupal
+ */
+// These are Drupal specific hooks for fconnect module. We define all the hooks we need here.
+/**
+ * Implementation of hook_init for module
+ * @return unknown_type
+ */
+function fconnect_init() {
+
+  global $user;
+   
+  $fconnect_facebook_plat = drupal_get_path('module', 'fconnect') .'/facebook-platform/php/facebook.php';
+  if (!file_exists($fconnect_facebook_plat)) {
+    drupal_set_message('Facebook Platform not found check see fconnect README.TXT', 'warning');
+    return;
+  }
+  include_once($fconnect_facebook_plat);
+
+  fconnect_add_js();
+
+  // Facebook logged in user is obtained here
+  $fbuid = fconnect_get_fb_user();
+   
+  if (!$fbuid || (arg(0) == 'fconnect' && arg(1) == 'logout')) {
+    return;
+  }
+}
+
+/**
+ * Implementation of hook_menu for module
+ * @return unknown_type
+ */
+function fconnect_menu() {
+  $items['fconnect/login'] = array(
+    'page callback' => 'fconnect_login',
+    //'page arguments' => array(2),
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+    'file' => 'fconnect.common.inc',
+  );
+  $items['fconnect/register'] = array(
+  'page callback' => 'drupal_get_form',
+  'page arguments' => array('fconnect_register_page'),
+  'access callback' => 'user_is_anonymous',
+  'type' => MENU_CALLBACK,
+  'file' => 'fconnect.common.inc',
+  );
+  $items['fconnect/invite'] = array(
+    'page callback' => 'fconnect_render_invite_form',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+    'file' => 'fconnect.common.inc',
+  );
+  //TODO: Remove this Hack to make logout work
+  $items['fconnect/logout'] = array(
+    'page callback' => 'fconnect_logout',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+    'file' => 'fconnect.common.inc',
+  );
+  //Associate existing users
+  $items['user/%user/facebook'] = array(
+    'title' => 'Facebook',
+    'page callback' => 'fconnect_user_identities',
+    'page arguments' => array(1),
+    'access callback' => 'user_edit_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'fconnect.common.inc',
+  );
+
+  // Admin menu
+  $items['admin/settings/fconnect'] = array(
+    'title' => 'Facebook connect (fconnect) settings', 
+    'page callback' => 'drupal_get_form', 
+    'page arguments' => array('fconnect_admin_settings'), 
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'fconnect.admin.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * hook_block for module
+ * @param $op
+ * @param $delta
+ * @param $edit
+ * @return unknown_type
+ */
+function fconnect_block($op = 'list', $delta = 0, $edit = array()) {
+  switch ($op) {
+    case 'list':
+      $blocks[0] = array(
+      'info' => t('Facebook Connect'),
+      'cache' => BLOCK_NO_CACHE,
+      );
+      //TODO: Add Recent visitors box
+      //      $blocks[1] = array(
+      //        'info'       => t('Facebook Recent Visitors'),
+      //      	'cache'		 => BLOCK_NO_CACHE,
+      //      );
+      return $blocks;
+    case 'configure':
+      $form['fconnect_show_block'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Show Facebook Connect block only when user logged in?'),
+      '#default_value' => variable_get('fconnect_show_block', 0),
+      '#description' => t('If checked, Facebook Connect box will be available only when user is logged in.'),
+      );
+      $form['fconnect_show_login_button'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Show Facebook Connect button in this block?'),
+      '#default_value' => variable_get('fconnect_show_login_button', 1),
+      '#description' => t('Selecting this will show Facebook Connect button in this block.'),
+      );
+      $form['fconnect_link_drupal_profile'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Link profile pictures to Drupal profile?'),
+      '#default_value' => variable_get('fconnect_link_drupal_profile', 1),
+      '#description' => t('Selecting this will link profile pictures to Drupal user account. Otherwise, it will link to Facebook profile'),
+      );
+      $form['fconnect_block_no_friends'] = array(
+      '#type' => 'textfield',
+      '#title' => t('No. of friends to display'),
+      '#size' => 60,
+      '#description' => t('This controls how many friends to show in total'),
+      '#default_value' => variable_get('fconnect_block_no_friends', 9),
+      );
+      $form['fconnect_block_no_cols'] = array(
+      '#type' => 'textfield',
+      '#title' => t('No. of cols. to display'),
+      '#size' => 60,
+      '#description' => t('This controls how many columns show up in the block for connected friends on this site'),
+      '#default_value' => variable_get('fconnect_block_no_cols',  3),
+      );
+      $form['fconnect_block_button_size'] = array(
+      '#type' => 'select',
+      '#title' => t('Facebook Button Size'),
+      '#default_value' => variable_get('fconnect_block_button_size', 'medium'),
+      '#description' => t('This determines the thickness of Facebook connect button that will be displayed in block'),
+      '#options' => array('small', 'medium', 'large'),
+      );
+      $form['fconnect_block_button_length'] = array(
+      '#type' => 'select',
+      '#title' => t('Facebook Login Button Length'),
+      '#default_value' => variable_get('fconnect_block_button_length', 'short'),
+      '#description' => t('This determines the length of Facebook connect button that will be displayed in block'),
+      '#options' => array('short', 'long'),
+      );
+      return $form;
+    case 'save':
+      variable_set('fconnect_block_no_friends', $edit['fconnect_block_no_friends']);
+      variable_set('fconnect_block_no_cols', $edit['fconnect_block_no_cols']);
+      variable_set('fconnect_block_button_length', $edit['fconnect_block_button_length']);
+      variable_set('fconnect_block_button_size', $edit['fconnect_block_button_size']);
+      variable_set('fconnect_show_block', $edit['fconnect_show_block']);
+      variable_set('fconnect_show_login_button', $edit['fconnect_show_login_button']);
+      variable_set('fconnect_link_drupal_profile', $edit['fconnect_link_drupal_profile']);
+      return;
+    case 'view': default:
+      global $user;
+      // user_is_logged_in is drupal method
+      // if (user_is_logged_in() && fconnect_get_fb_user()) {
+      if ( !variable_get('fconnect_show_block', 0)) {
+        $blocks['content'] = theme('block_fconnect', fconnect_render_block(), $user);
+      }
+      elseif (fconnect_get_fb_user()) {
+        $blocks['content'] = theme('block_fconnect', fconnect_render_block(), $user);
+      }
+      return $blocks;
+  }
+}
+
+/**
+ * hook_form_alter for module
+ * @param $form
+ * @param $form_state
+ * @param $form_id
+ * @return unknown_type
+ */
+function fconnect_form_alter(&$form, $form_state, $form_id) {
+  if (($form_id == 'user_login_block' || $form_id == 'user_login') && fconnect_get_mod_settings() && variable_get('fconnect_show_login_button', 1)) {
+     
+    $button_length_enum = variable_get('facebook_button_length', '0');
+    switch ($button_length_enum) {
+      case 0:
+        $button_length ='short';
+        break;
+      case 1:
+        $button_length ='long';
+        break;
+    }
+     
+    $button_size_enum = variable_get('facebook_button_size', '1');
+    switch ($button_size_enum) {
+      case 0:
+        $button_size ='small';
+        break;
+      case 1:
+        $button_size ='medium';
+        break;
+      case 2:
+        $button_size ='large';
+        break;
+    }
+     
+    $items[] = array(
+      'data' => fconnect_render_button($button_size, $button_length),
+    );
+    $form['fconnect_button'] = array(
+      '#value' => theme('item_list', $items),
+    );
+  }
+
+  // Code to control what kind of content shows the Facebook Share button
+  if ($form_id == 'node_type_form' && isset($form['identity']['type'])) {
+    $form['workflow']['fconnect_nodetype'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Show Facebook Share button on this type of node'),
+      '#default_value' => variable_get('fconnect_nodetype_' . $form['#node_type']->type, 1),
+      '#description' => t('Should Facebook Share button be shown for this content type?'),
+    );
+  }
+}
+
+/**
+ * hook_user for module
+ * @param $op
+ * @param $edit
+ * @param $account
+ * @param $category
+ * @return unknown_type
+ */
+function fconnect_user($op, &$edit, &$account, $category = NULL) {
+  global $base_url;
+  switch ($op) {
+    case 'load':
+      break;
+    case 'delete':
+      $email = $GLOBALS['user']->mail;
+      fconnect_unregister_user($email);
+      break;
+    case 'view':
+      break;
+    case 'logout':
+      $connected_fb_user = fconnect_is_drupal_user_connected($account->uid);
+      $fbuid = fconnect_get_fb_user();
+      if ($fbuid && ($connected_fb_user == $fbuid) ) {
+        drupal_goto('fconnect/logout');
+      }
+      break;
+  }
+}
+
+
+function fconnect_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
+
+  if ($node) {
+    $path = 'node/'. $node->nid;
+  }
+
+  if ($node && variable_get('fconnect_nodetype_' . $node->type, 1)) {
+    $url_post = url($path, array('absolute' => TRUE));
+     
+    // This variable determines if we should show the box_count or not
+    $facebook_share_button_big = variable_get('facebook_share_button_big', '1');
+    // Full View
+    if ($op == 'view' && !$a3) {
+      if ($facebook_share_button_big == '1') {
+        $node->content['fconnect_button'] = array(
+        '#value' => '<div class="fconnect_share_butt" style="float:left;margin-right:5px;margin-top:5px;"><a name="fb_share" type="box_count" share_url="'. $url_post .'"></a></div>',
+        '#weight' => -20
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Implementation of hook_link().
+ */
+function fconnect_link($type, $node=NULL, $teaser = FALSE) {
+
+  $links = array();
+
+  if ($type === 'node') {
+    $path = 'node/'. $node->nid;
+    $url_post = url($path, array('absolute' => TRUE));
+    if ($node && variable_get('fconect_nodetype_' . $node->type, 1)) {
+       
+      $share_button_enum = variable_get('facebook_share_button_type', '1');
+      switch ($share_button_enum) {
+        case 0:
+          $share_button ='box_count';
+          break;
+        case 1:
+          $share_button ='button_count';
+          break;
+        case 2:
+          $share_button ='button';
+          break;
+        case 3:
+          $share_button ='icon_link';
+          break;
+        case 4:
+          $share_button ='icon';
+          break;
+      }
+
+      // facebook_share_button_visibility 0-teaser, 1-full, 2-both, 3-none
+      $facebook_share_button_visibility = variable_get('facebook_share_button_visibility', '1');
+      // Teaser View
+      if ($teaser == TRUE) {
+        if ($facebook_share_button_visibility == '0' || $facebook_share_button_visibility == '2') {
+          $links['Facebook'] = array(
+            'title' => '<a name="fb_share" type="'. $share_button .'" share_url="'. $url_post .'"></a>',
+            'html' => TRUE
+          );
+        }
+      }
+      // Full View
+      if ($teaser == FALSE) {
+        if ($facebook_share_button_visibility == '1' || $facebook_share_button_visibility == '2') {
+          $links['Facebook'] = array(
+            'title' => '<a name="fb_share" type="'. $share_button .'" share_url="'. $url_post .'"></a>',
+            'html' => TRUE
+          );
+        }
+      }
+    }
+  }
+
+  return $links;
+}
+
+/**
+ * Implementation of hook_footer().
+ */
+function fconnect_footer() {
+  $footer = '<script type="text/javascript" src="http://static.ak.connect.facebook.com/js/api_lib/v0.4/FeatureLoader.js.php"></script>';
+
+  //Add script for share button
+  $footer .= '<script src="http://static.ak.fbcdn.net/connect.php/js/FB.Share" type="text/javascript"></script>';
+  return $footer;
+}
+
+
+/**
+ * hook_theme for module
+ * @return unknown_type
+ */
+function fconnect_theme() {
+  return array('block_fconnect' => array('arguments' => array('data' => NULL, 'account' => NULL)), );
+}
+
+/**
+ * Override template_preprocess_user_picture() to display user pictures with
+ * Gravatar integration.
+ *
+ * @see template_preprocess_user_picture()
+ */
+function fconnect_preprocess_user_picture(&$variables) {
+  $variables['picture'] = '';
+  $_using_facebook_pic = FALSE;
+  $account = $variables['account'];
+  $user_profile_url = url('user/' . $account->uid);
+  $fbuid = fconnect_is_drupal_user_connected($account->uid);
+  $fb_pic_size_enum = variable_get('facebook_profile_pic_size', 2);
+  
+  switch ($fb_pic_size_enum) {
+    case 0:
+      $fb_pic_size = 'thumb';
+      break;
+    case 1:
+      $fb_pic_size = 'short';
+      break;
+    case 2:
+      $fb_pic_size = 'normal';
+      break;
+    case 3:
+      $fb_pic_size = 'square';
+      break;
+  }
+  
+  if (variable_get('user_pictures', 0)) {
+    if ($fbuid && isset($account->fconnect_use_fb_picture)) {
+      // We need to use facebook profile picture
+      $_using_facebook_pic = TRUE;
+      $picture = _fconnect_render_profile_pic($fbuid, $fb_pic_size, 'true');
+    }
+    else {
+      if (!empty($account->picture) && file_exists($account->picture)) {
+        $picture = file_create_url($account->picture);
+      }
+      elseif (variable_get('user_picture_default', '')) {
+        $picture = variable_get('user_picture_default', '');
+      }
+    }
+    
+    if (isset($picture)) { 
+      if ($_using_facebook_pic) {
+        $variables['picture'] = $picture;        
+      }
+      else {
+        $alt = t("@user's picture", array('@user' => $account->name ? $account->name : variable_get('anonymous', t('Anonymous'))));
+        $variables['picture'] = theme('image', $picture, $alt, $alt, '', FALSE);
+      }
+      
+      //Make picture linkable if allowed
+      if (!empty($account->uid) && user_access('access user profiles')) {
+        $variables['picture'] = fconnect_create_link_drupal_user_profile($variables['picture'], $account->uid);
+      }
+    }
+  }
+  
+}
+
+
+function fconnect_form_user_profile_form_alter(&$form, $form_state) {
+  
+  //get current user
+  $account = $form['_account']['#value'];
+  $fbuid = fconnect_is_drupal_user_connected($account->uid);
+  $fb_pic_size_enum = variable_get('facebook_profile_pic_size', 2);
+  
+  switch ($fb_pic_size_enum) {
+    case 0:
+      $fb_pic_size = 'thumb';
+      break;
+    case 1:
+      $fb_pic_size = 'short';
+      break;
+    case 2:
+      $fb_pic_size = 'normal';
+      break;
+    case 3:
+      $fb_pic_size = 'square';
+      break;
+  }
+ 
+  if ($fbuid && $form['_category']['#value'] == 'account' && isset($form['picture']) && variable_get('user_pictures', 0) && $account) {
+    // Add the default user picture preview.
+    if (!isset($form['picture']['current_picture']) && ($picture = theme('user_picture', $account))) {
+      $form['picture']['current_picture'] = array(
+      '#value' => $picture,
+      '#title' => t('Current Drupal Profile Picture'),
+      '#weight' => -10,
+      '#description' => t('Current Drupal Profile Picture')
+      );
+    }
+    //Whether to user facebook profile picture or not.
+    $form['picture']['fconnect_use_fb_picture'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Use profile picture from Facebook'),
+    '#default_value' => isset($account->fconnect_use_fb_picture) ? $account->fconnect_use_fb_picture : 0,
+    '#description' => t('Selecting this will pull Facebook profile picture as Drupal picture'),
+    );
+    $form['picture']['facebook_picture'] = array(
+    '#value' => _fconnect_render_profile_pic($fbuid, $fb_pic_size, 'true'),
+    '#title' => t('Current Facebook Picture'),
+    '#description' => t('Current Facebook Picture'),
+    );
+  }
+}
+//End of hook specific code
+
+// Helper Methods
+/**
+ * Retrieve apiKey and secret from variables table. This returns false if not available
+ * @return unknown_type
+ */
+function fconnect_get_mod_settings() {
+  $fconnect_settings['fb_api_key'] = variable_get('facebook_api_key', NULL);
+  $fconnect_settings['fb_secret'] = variable_get('facebook_secret', NULL);
+  if (!$fconnect_settings['fb_api_key'] || !$fconnect_settings['fb_secret']) {
+    return;
+  }
+  return $fconnect_settings;
+}
+
+/*
+ * Renders the JS necessary for any Facebook interaction to work.
+ */
+function fconnect_add_js() {
+
+  $onload_js;
+  $fconnect_settings = fconnect_get_mod_settings();
+  drupal_add_js(drupal_get_path('module', 'fconnect') .'/fbconnect.js', 'module', 'footer');
+
+  $xd_receiver_path = base_path() . drupal_get_path('module', 'fconnect') .'/xd_receiver.html';
+  drupal_add_js('FB_RequireFeatures(["XFBML"], function() {FB.Facebook.init("'. $fconnect_settings['fb_api_key'] .'", "'. $xd_receiver_path .'");});', 'inline', 'footer');
+
+  global $base_url;
+  global $base_path;
+
+  //Publish registration feed
+  if ($_SESSION['fconnect_feed_prompt']['type'] == 'register' && arg(0) != 'fconnect') {
+    // TODO: Test this new code
+    $attachment = array('caption' => "{*actor*} joined ". $base_url);
+    $action_links = array(array('text' => "Join Site", 'href' => $base_url ));
+
+    $onload_js .= 'facebook_publish_story(\'\','. json_encode($attachment) .','. json_encode($action_links) .');';
+    // TODO: New code ends
+    unset($_SESSION['fconnect_feed_prompt']);
+  }
+  if (fconnect_client()) {
+    $already_logged_in = fconnect_get_fb_user() ? "true" : "false";
+    //$redirect_path = str_ireplace($base_path,"", $_SERVER[REQUEST_URI]);
+    $base_length = strlen($base_path);
+    $redirect_path= substr($_SERVER[REQUEST_URI], $base_length);
+    $onload_js .= sprintf("facebook_onload(%s,'%s','%s');", $already_logged_in, $base_url, $redirect_path);
+    drupal_add_js('window.onload = function() {'. $onload_js .'};', 'inline', 'footer');
+  }
+
+  //TODO: Check what else is needed from FBConnect.js
+}
+
+/*
+ * Render a custom button to log in via Facebook.
+ * When the button is clicked, the Facebook JS library pops up a Connect dialog
+ * to authenticate the user.
+ * If the user authenticates the application, the handler specified by the
+ * onlogin attribute will be triggered.
+ *
+ * @param $size   size of the button. one of ('small', 'medium', 'large')
+ *
+ */
+function fconnect_render_button($size='medium', $length='short') {
+  global $base_url;
+  global $base_path;
+  //TODO: Find a more graceful way here to do this
+  $base_length = strlen($base_path);
+  $redirect_path= substr($_SERVER[REQUEST_URI], $base_length);
+  //$redirect_path = str_ireplace($base_path,"", $_SERVER[REQUEST_URI]);
+  //$mod_path = drupal_get_path('module', 'fconnect');
+  return '<fb:login-button '.
+           'size="'. $size .'" background="light" length="'. $length .
+           '" onlogin="facebook_onlogin_ready(\''. $base_url .'\',\''. $redirect_path .'\');"></fb:login-button>';
+}
+
+/**
+ * This returns the profile picture from facebook
+ * @param $show_logo
+ * @return unknown_type
+ */
+function fconnect_render_profile_pic($show_logo=FALSE) {
+  $fbuid = fconnect_get_fb_user();
+  return  '<fb:profile-pic uid="'. $fbuid .'" size="square" ' . ($show_logo ? ' facebook-logo="true"' : '') . '></fb:profile-pic>';
+}
+
+/*
+ * 
+ * @return unknown_type
+ */
+function _fconnect_render_profile_pic($fbuid, $size = 'square', $show_logo = 'true', $link_to_fb = 'false') {
+  return '<fb:profile-pic uid="'. $fbuid .'" linked="'. $link_to_fb .'" size="'. $size .'" facebook-logo="'. $show_logo .'"></fb:profile-pic>';
+}
+
+/*
+ * Get the facebook client object for easy access.
+ */
+function fconnect_client() {
+  static $facebook = NULL;
+
+  $fconnect_settings = fconnect_get_mod_settings();
+
+  if ($facebook === NULL) {
+    $facebook = new Facebook($fconnect_settings['fb_api_key'], $fconnect_settings['fb_secret']);
+
+    if (!$facebook) {
+      error_log('Could not create facebook client.');
+    }
+
+  }
+  return $facebook;
+}
+
+/**
+ * Check facebook session.
+ */
+function fconnect_get_fb_user() {
+  try {
+    $facebook = & fconnect_client();
+    if ($facebook)  return $facebook->get_loggedin_user();
+  }catch (FacebookRestClientException $e) {
+    watchdog('fconnect', 'Facebook connect error: %code', array('%code' => $e->getCode()), WATCHDOG_WARNING);
+    return;
+  }
+}
+
+/**
+ * Render data for fconnect block
+ */
+function fconnect_render_block() {
+  $fbuid = fconnect_get_fb_user();
+  // Check for a cached version of this block.
+  $cid = 'fconnect:userblock:fbuid:'. $fbuid;
+
+  if ($cached = cache_get($cid, 'cache_block')) {
+    $content = $cached->data;
+  }
+  else{
+    $content = fconnect_get_connected_friends($fbuid);
+    //Set cache expiration to 1 hour
+    //TODO: uncomment once cached bug is fixed.
+    //cache_set($cid, $content, 'cache_block' , time() + 3600);
+  }
+  $data['friend_list'] = $content;
+  $data['friend_link'] = l(t('Invite Facebook friends'), 'fconnect/invite');
+  return $data;
+}
+
+/**
+ * Theme for displaying friends
+ * @param $data
+ * @param $account
+ * @return unknown_type
+ */
+function theme_block_fconnect($data, $account) {
+  if (!empty($data)) {
+    $fbuid = fconnect_get_fb_user();
+    $drupal_userid = fconnect_is_connected_user($fbuid);
+    $user_profile = _fconnect_render_profile_pic($fbuid, 'square', 'true');
+    //Show block contents only if logged in user in facebook and drupal are the same
+    if ($fbuid && (($drupal_userid == $account->uid) || !isset($drupal_userid))) {
+      $output = '<div class="fconnect_profile_pic">'. fconnect_create_link_drupal_user_profile($user_profile, $drupal_userid) .'</div>';
+      $output .= '<div class="fconnect_status">Recent Update: <fb:user-status uid="'. $fbuid .'" linked="true"></fb:user-status></div>';
+      $output .= $data['friend_link'];
+      $output .= '<div class="fconnect_block_friends">'. t('My friends on this site') .'</div>';
+      $friends = $data['friend_list'];
+      $friendlist = '<div class="fconnect_block_friend">';
+      $fconnect_block_no_friends = variable_get('fconnect_block_no_friends',  9);
+      $fconnect_block_no_cols = variable_get('fconnect_block_no_cols',  3);
+      foreach ($friends as $friend) {
+        if ($fconnect_block_no_friends > 0) {
+          // If last one in the row -- there are always three columns
+          $temp_drupal_userid = fconnect_is_connected_user($friend);
+          if(!variable_get('fconnect_link_drupal_profile',  1)) {
+            $temp_user_profile = _fconnect_render_profile_pic($friend, 'square', 'true','true');
+          }
+          else {
+            $temp_user_profile = _fconnect_render_profile_pic($friend, 'square', 'true');
+            if (!empty($account->uid) && user_access('access user profiles')) {
+                $temp_user_profile = fconnect_create_link_drupal_user_profile($temp_user_profile, $temp_drupal_userid);
+            }
+          }
+          
+          $friendlist .= $temp_user_profile;
+          // extra space is for formatting
+          if (!($fconnect_block_no_friends % $fconnect_block_no_cols == 1)) {
+            $friendlist .= '&nbsp;';
+          }
+        }
+        else {
+          break;
+        }
+        $fconnect_block_no_friends--;
+      }
+      $friendlist .= '</div>';
+      $output .= $friendlist;
+
+      //Show a message if the account is not associated yet
+      $userid = fconnect_is_connected_user($fbuid);
+      if ($fbuid && user_is_logged_in() && !$userid && !fconnect_is_drupal_user_connected($fbuid)&& arg(0) != 'user' && arg(2) != 'facebook') {
+        $link_to_user = 'user/'. $GLOBALS['user']->uid .'/facebook';
+        $output .= l('Click here', $link_to_user) .' if you wish to link this Facebook account to your site account.';
+      }
+    }
+
+    $button_length_enum = variable_get('fconnect_block_button_length', 'short');
+    switch ($button_length_enum) {
+      case 0:
+        $button_length ='short';
+        break;
+      case 1:
+        $button_length ='long';
+        break;
+    }
+    $button_size_enum = variable_get('fconnect_block_button_size', 'medium');
+    switch ($button_size_enum) {
+      case 0:
+        $button_size ='small';
+        break;
+      case 1:
+        $button_size ='medium';
+        break;
+      case 2:
+        $button_size ='large';
+        break;
+    }
+     
+    if (!user_is_logged_in() && variable_get('fconnect_show_login_button', 1)) {
+      $output .= fconnect_render_button($button_size, $button_length);
+    }
+    return $output;
+  }
+}
+
+/**
+ * Render facebook favicon
+ */
+function fconnect_render_facebook_favicon() {
+  return '<img src="http://static.ak.fbcdn.net/images/icons/favicon.gif"/>';
+}
+
+/**
+ * Get the facebook username
+ * @param integer $fbuid
+ *   Facebook user id
+ */
+function fconnect_get_fb_username($fbuid) {
+  try {
+    $result = fconnect_client()->api_client->fql_query('SELECT name FROM user WHERE uid ='. $fbuid);
+    return check_plain($result[0]['name']);
+  } catch (Exception $e) {
+    watchdog('fconnect', 'Facebook connect error: %code', array('%code' => $e->getCode()), WATCHDOG_WARNING);
+  }
+}
+
+/**
+ * Try to find if connected user
+ * @param $fbuid
+ * @return unknown_type
+ */
+function fconnect_is_connected_user($fbuid) {
+  $associd = db_result(db_query("SELECT uid FROM {authmap} WHERE module='fconnect' AND authname=%d", $fbuid));
+  if ($associd) {
+    return $associd;
+  }
+  return;
+}
+
+function fconnect_is_drupal_user_connected($uid) {
+  $associd = db_result(db_query("SELECT authname FROM {authmap} WHERE module='fconnect' AND uid=%d", $uid));
+  if ($associd) {
+    return $associd;
+  }
+  return;
+}
+
+//Code from Runaround sample - modified for this module
+/**
+ * Register new accounts with Facebook to facilitate friend linking.
+ * Note: this is an optional step, and only makes sense if you have
+ * a site with an existing userbase that you want to tie into
+ * Facebook Connect.
+ *
+ * See http://wiki.developers.facebook.com/index.php/Friend_Linking
+ * for more details.
+ *
+ * @param $accounts  array of accounts, each with keys 'email_hash' and 'account_id'
+ * @return whether the emails were registered. true unless there's an error
+ */
+function fconnect_register_users($accounts) {
+  $facebook = fconnect_client();
+  $session_key = $facebook->api_client->session_key;
+  $facebook->api_client->session_key = NULL;
+
+  $result = FALSE;
+  try {
+    $ret = $facebook->api_client->call_method(
+             'facebook.connect.registerUsers',
+    array('accounts' => json_encode($accounts)));
+
+    // On success, return the set of email hashes registered
+    // An email hash will be registered even if the email does not match a Facebook account
+
+    $result = (count($ret) == count($accounts));
+  } catch (Exception $e) {
+    error_log("Exception thrown while calling facebook.connect.registerUsers: ". $e->getMessage());
+  }
+
+  $facebook->api_client->session_key = $session_key;
+  return $result;
+}
+
+/**
+ * Lets Facebook know that these emails are no longer members of your site.
+ *
+ * @param email_hashes   an array of strings from registerUsers
+ */
+function fconnect_unregister_users($email_hashes) {
+  $facebook = fconnect_client();
+  $session_key = $facebook->api_client->session_key;
+  $facebook->api_client->session_key = NULL;
+
+  // Unregister the account from fb
+  $result = FALSE;
+  try {
+    $ret = $facebook->api_client->call_method(
+             'facebook.connect.unregisterUsers',
+    array('email_hashes' => json_encode($email_hashes)));
+    $result = (count($email_hashes) == count($ret));
+  } catch (Exception $e) {
+    error_log("Exception thrown while calling facebook.connect.unregisterUsers: ". $e->getMessage());
+  }
+
+  $facebook->api_client->session_key = $session_key;
+  return $result;
+}
+
+/**
+ * Returns all friends - from runaround sample
+ * @param $user
+ * @return unknown_type
+ */
+function fconnect_get_all_friends($user) {
+  $query = 'SELECT uid2 AS uid FROM friend WHERE uid1 = ' . $user;
+  return fconnect_client()->api_client->fql_query($query);
+}
+
+/**
+ * Returns connected friends - from runaround sample
+ */
+function fconnect_get_connected_friends($user) {
+  $results = array();
+  $query = 'SELECT uid, email_hashes, has_added_app FROM user WHERE uid IN '.
+    '(SELECT uid2 FROM friend WHERE uid1 = '. $user .')';
+  try {
+    $rows = fconnect_client()->api_client->fql_query($query);
+
+    // Do filtering in PHP because the FQL doesn't allow it (yet)
+    if (!empty($rows)) {
+      foreach ($rows as $row) {
+        if ((is_array($row['email_hashes']) && count($row['email_hashes']) > 0) ||
+        ($row['has_added_app'] == 1)) {
+          unset($row['has_added_app']);
+          $results[] = $row['uid'];
+        }
+      }
+    }
+  }
+  catch (Exception $e) {
+    error_log("Failure in the api: ". $e->getMessage());
+  }
+
+  return $results;
+}
+
+/**
+ * Returns the "public" hash of the email address, i.e., the one we give out
+ * to select partners via our API.
+ *
+ * @param  string $email An email address to hash
+ * @return string        A public hash of the form crc32($email)_md5($email)
+ */
+function fconnect_email_get_public_hash($email) {
+  if ($email != NULl) {
+    $email = trim(strtolower($email));
+    return sprintf("%u", crc32($email)) . '_' . md5($email);
+  } 
+  else {
+    return '';
+  }
+}
+
+function fconnect_get_bundle_id($template) {
+  switch ($template) {
+    case 'register':
+      $bundle_id = variable_get('facebook_register_feed_bundle_id', '55748527847');
+      return $bundle_id;
+      break;
+    case 'comment':
+      break;
+  }
+}
+
+function fconnect_get_template($template) {
+  switch ($template) {
+    case 'register':
+      $template = variable_get('facebook_register_feed_template', '{"blog":"http://www.vishalsood.com"}');
+      return $template;
+      break;
+    case 'comment':
+      break;
+  }
+}
+
+function fconnect_create_link_drupal_user_profile($input, $uid) {
+  $attributes = array('attributes' => array('title' => t('View user profile.')), 'html' => TRUE);
+  return l($input, "user/$uid", $attributes);
+}
+
+//End of file
